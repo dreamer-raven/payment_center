@@ -1,0 +1,68 @@
+variables:
+  DOCKER_REGISTRY_PREFIX: registry.cn-hangzhou.aliyuncs.com/eschain
+  DOCKER_REGISTRY_VPC_PREFIX: registry-vpc.cn-hangzhou.aliyuncs.com/eschain
+
+stages:
+  - Test
+  - Build
+  - Deploy
+
+unittest:
+  stage: Test
+  script:
+    - mv .env.test .env
+    - composer install
+    - ./vendor/bin/phpunit -v --coverage-text --colors=never --coverage-html=coverage --stderr
+  artifacts:
+    when: on_success
+    paths:
+      - coverage/
+    expire_in: 1 hour
+  coverage: '/^\s*Lines:\s*\d+.\d+\%/'
+  only:
+    - branches
+    - tags
+
+lint:
+  stage: Test
+  script:
+    - composer install
+    - ./vendor/bin/phplint ./ --exclude=vendor
+  only:
+    - branches
+    - tags
+
+build:prod:
+  stage: Build
+  only:
+    - tags
+  dependencies:
+    - unittest
+  variables:
+    DOCKER_IMAGE_NAME: ${DOCKER_REGISTRY_PREFIX}/${CI_PROJECT_NAME}:${CI_COMMIT_TAG}
+  script:
+    - composer install --no-dev
+    - consul kv get $CI_PROJECT_PATH > .env
+    - echo "Image name:" ${DOCKER_IMAGE_NAME}
+    - docker build -t ${DOCKER_IMAGE_NAME} .
+    - docker push ${DOCKER_IMAGE_NAME}
+
+deploy:prod:
+  stage: Deploy
+  tags: [hangzhou]
+  only:
+    - tags
+  environment:
+    name: prod
+    url: http://test.com
+  dependencies:
+    - build:prod
+  script:
+    - echo "start deploy to prod env"
+    - kubectl set image deployment/${CI_PROJECT_NAME} ${CI_PROJECT_NAME}=${DOCKER_REGISTRY_VPC_PREFIX}/${CI_PROJECT_NAME}:${CI_COMMIT_TAG} -n ${K8S_NAMESPACE}
+    - kubectl set image deployment/${CI_PROJECT_NAME}-queue ${CI_PROJECT_NAME}-queue=${DOCKER_REGISTRY_VPC_PREFIX}/${CI_PROJECT_NAME}:${CI_COMMIT_TAG} -n ${K8S_NAMESPACE}
+
+    
+
+
+
